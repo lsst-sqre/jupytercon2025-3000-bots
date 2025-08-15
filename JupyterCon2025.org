@@ -1,0 +1,178 @@
+#+title: JupyterHub/JupyterLab at scale: Rubin Observatory case study
+#+author: Frossie Economou <frossie@lsst.org>, Russ Allbery <rra@lsst.org>, Adam Thornton <athornton@lsst.org>
+
+* Problem Statement
+
+We needed to be ready for Data Preview 1 on June 30, 2025.  This would
+be the first public release of catalog data from the Rubin Observatory.
+We did not know how many users we would get at [[https://data.lsst.cloud][our Internet Data
+Facility hosted by Google]] (the primary access point for the scientific
+community that is not involved in Rubin construction), nor how many of
+those would be concurrently active, but "between zero and 10,000" were
+the weak bounds.  "Probably a couple thousand total, don't know about
+concurrency" was the consensus estimate.
+
+* Overall Architecture
+
+The Rubin Science Platform is defined and managed  by the [[https://phalanx.lsst.io][Phalanx]]
+GitHub repository.  To a first approximation, all of our software is
+Open Source and available on GitHub, and all of Phalanx runs under
+Kubernetes, one Kubernetes cluster per instance of the Rubin Science
+Platform.
+
+JupyterLab (in the guise of our notebook aspect service) is only one of
+many services we provide in the Rubin Science Platform.  The Lab aspect
+and its support services, such as JupyterHub and Lab container lifecycle
+management, are collectively referred to as "Nublado".  The user sees a
+JupyterLab containers inside which is installed the Rubin Data
+Management Science Platform pipeline processing software.  Nublado
+itself is largely based on Zero to JupyterHub, with some additional
+components.
+
+There are Rubin Science Platform instances across the globe.  The
+scaling we are going to talk about today concerns the production
+instance at Google in us-central1.  An account on this system is
+available to any US or Chilean astronomer (as determined by
+institutional affiliation; there are other data rights holders as well,
+but the criteria are more complicated).  The astronomical data for this
+RSP instance, which is accessed via an abstraction layer called the
+Butler, is hosted by SLAC at our US Data Facility in Palo Alto.
+
+(Naturally, there are Science Platform deployments at SLAC, at the
+summit, in La Serena, and elsewhere; we are only talking about scaling
+considerations for our production Google deployment today).
+
+** Obvious and Standard features of Google Kubernetes Engine
+
+1. Thousands of users using tens of thousands of CPU cores with access
+   to (eventually) many petabytes of data is very large-scale for
+   optical astronomy.  It's not particularly huge for Google, even if we
+   were going to keep all our data there (which we are not; see below).
+2. GKE's autoscaling is well-tested, so capacity planning (and burst
+   capacity management: everyone's very excited the first week after a
+   data release, but less so by the third month) becomes a matter of
+   budget rather than having to order and commission new hardware months
+   in advance.  However, that assumes that all the services will
+   /actually/ scale with the hardware.  The fact that they don't,
+   without significant thought and work, is what this talk is about.
+
+** Nonstandard Architectural Decisions
+
+1. Data does not, generally, reside close to the computation.  This is
+   less than ideal, but there will be a huge amount of data and Google
+   data storage is quite expensive.  Caching in the Butler helps to
+   mitigate this.
+2. We use per-user namespaces in our JupyterLab deployment to provide
+   isolation between users, resource quotaing for individual users, and
+   to make resource teardown easier.
+3. We don't use KubeSpawner.  Yes, we know we wrote the asyncio support
+   for it.  Nevertheless, we use a controller, running in a separate
+   Kubernetes deployment, that provides an HTTP interface that maps
+   neatly onto the spawner API.  This reduces the attack surface
+   significantly, since JupyterHub itself is quite complex, and the
+   controller (particularly in a user-namespace deployment scenario)
+   requires effectively full control of the K8s cluster.
+
+* Goals for Data Preview 1
+
+Data Preview 1 was scheduled (and met its schedule) for June 30.  It is
+a comparatively tiny amount of telescope commissioning data (FIXME: how
+much?), but was the first time that the global astronomical community
+could use the Rubin Science Pipelines operating on Rubin-collected data.
+
+We knew there would be a lot of interest in it from the astronomical
+community, but we did not know either how many people would be
+interested enough to show up and kick the tires, or what their usage
+patterns would really look like.  These would be, for the most part,
+astronomers who had not been involved with Rubin Observatory
+construction, and who would not have been intimately involved with the
+development of our science pipelines. That meant that previous usage
+patterns, which came from very sophisticated users, who were usually
+also developers of our software systems, would not reflect how this
+influx of new users would use the system.
+
+** Scale test goal size
+
+We chose a target value of 3000 users, or roughly 30% of the US/Chilean
+population of astronomers, as "probably more than would show up for Data
+Preview 1".  We expected this particular audience to be people itching
+to do science with Rubin, who wanted to make sure they understood how to
+use our processing pipelines well before release of actual science data
+from the survey.
+
+As of July 8, 2025, we had 1165 non-bot users on the system (roughly 15%
+of these did not have accounts prior to June 30--that is, those users
+came aboard in the last week). The rate of increase has been slow
+because there is a somewhat cumbersome manual approval process for new
+users, and that has been the rate-limiting step thus far.  So far the
+observed high-water mark for concurrency has been about 550 simultaneous
+users.
+
+** How we test
+
+*** mobu
+
+We have a service we wrote called =mobu= that can run various payloads
+(predominantly Jupyter notebooks) within the RSP.  Its major use case
+has been automated regression testing as the science pipelines evolve.
+
+However, =mobu= should be indistinguishable (from JupyterHub's point of
+view) from an astronomer logging in and doing work.  It functions by
+using the Hub API to establish a JupyterLab session and then can run
+Python code or complete notebooks within kernel sessions).
+
+*** Test strategy
+
+Our strategy, in a nutshell, was to try to spin up 3000 simultaneous
+users.  We expected this to fail.  We'd see what failed first, fix that,
+and repeat until we got 3000 simultaneous user workloads running
+correctly.
+
+* How this played out
+
+The first thing that broke was Mobu.  We had only allowed 1000
+simultaneous tasks.  We changed that limit.  This got us to 3000 users
+who didn't do any work, so we knew that the test framework would hold
+together.
+
+We tried 100 users running a notebook next, which worked, and then 300.
+The Kubernetes control plane seemed to get angry...
+
+[here we will basically just construct a narrative around the scaletest
+notes]
+
+** Things we didn't expect
+
+Abandoned open Websockets, because users never shut down their labs when
+they leave, have a huge impact on the proxy.  The answer is, probably,
+"use CHP 5"; as of 8 July, so far so good. [as of 15 Aug, yeah, that
+does the trick]
+
+Cryptominers (and that Google finds them for us).  We don't provide
+GPU-based services at present. It's pointless to do on our
+platform. That doesn't stop people from trying.
+
+** Interesting lessons learned
+
+Think through your onboarding story.  If you are expecting a sudden
+large influx of users, and you need to vet your users in some way to
+ensure that they should be allowed onto your system, then you need that
+approval process to scale as well.
+
+Think through your offboarding story: how will you invalidate
+credentials and terminate sessions for users that you have to force off
+your services /right now/?
+
+How will you differentiate deliberate abuse, like cryptominers, from
+naive users who just create automation that performs inefficient work
+very fast (like two cutouts a second forever)?
+
+If you have a notebook service /and/ you provide other services at the
+same place for the notebook users' consumption, a gatekeeping service
+like Gafaelfawr is a necessity, not just a nice-to-have, because you
+/will/ need to rate-limit your users.
+
+A Science Platform is not just a Notebook Service.  At least, ours is
+not. Yours might be, but it's unlikely. See above: you /will/ need to
+rate-limit users.
+
