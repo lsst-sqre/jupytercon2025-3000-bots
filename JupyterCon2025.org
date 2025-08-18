@@ -98,7 +98,8 @@ population of astronomers, as "probably more than would show up for Data
 Preview 1".  We expected this particular audience to be people itching
 to do science with Rubin, who wanted to make sure they understood how to
 use our processing pipelines well before release of actual science data
-from the survey.
+from the survey.  Therefore we expected them to be, on average, more
+sophisticated than our eventual mid-operations median user would be.
 
 As of July 8, 2025, we had 1165 non-bot users on the system (roughly 15%
 of these did not have accounts prior to June 30--that is, those users
@@ -107,6 +108,11 @@ because there is a somewhat cumbersome manual approval process for new
 users, and that has been the rate-limiting step thus far.  So far the
 observed high-water mark for concurrency has been about 550 simultaneous
 users.
+
+As of August 18, after the Data Preview 1 release, we had 1295 non-bot
+users.
+
+We use =n2-standard-32= nodes: 32 cores, 128GB memory on each node.
 
 ** How we test
 
@@ -128,29 +134,195 @@ users.  We expected this to fail.  We'd see what failed first, fix that,
 and repeat until we got 3000 simultaneous user workloads running
 correctly.
 
-* How this played out
+* Scaletest Narrative
 
-The first thing that broke was Mobu.  We had only allowed 1000
-simultaneous tasks.  We changed that limit.  This got us to 3000 users
-who didn't do any work, so we knew that the test framework would hold
-together.
+We began scaletesting in late January.
 
-We tried 100 users running a notebook next, which worked, and then 300.
-The Kubernetes control plane seemed to get angry...
+Our very first test was 1000 users, who logged in, did nothing
+(crucially: did not start a pod), and logged out.  That worked fine.  We
+next tried 3000 users, and that did not work: we didn't get very far
+above 1000 users.  Kubernetes was showing us only 12,000 events a
+minute, and we would have expected 36,000.  This turned out to be our
+own fault.  Mobu, our test framework, only allowed 1000 tasks at a time.
+We then raised that limit, and went to 3000 users.  At this point we saw
+the expected 36,000 events per minute.
 
-[here we will basically just construct a narrative around the scaletest
-notes]
+Time to start doing real work.  At 100 simultaneous users each running a
+trivial notebook (no code, just text), everything worked fine.  GKE
+autoscaling performed as advertised.
+
+We decided to try for 1000 users.  At 300 users we began to see spawn
+timeouts.  The Kubernetes control plane was becoming overwhelmed.
+Likewise, mobu was failing to shut down pods it should have.
+
+After killing mobu the pods did eventually drain and the node pool
+scaled down, but it took about 15 minutes.
+
+By early February we were ready to re-try the 1000 user pile-on.  Next
+Mobu ran out of memory and got OOM-killed.  More memory for it and the
+controller pod fixed that.
+
+Next followed a round of timeout-chasing, some bugs around dict race
+conditions that we never would have found on a reasonably-loaded system,
+and realizing that cloning repositories into JupyterLab on startup was
+going to cause GitHub rate limiting problems at scale.
+
+Even without hitting Kubernetes CPU limits, we started to get timeouts
+from Lab-to-Hub communications.
+
+We started to see failures talking to the proxy server, and strange
+failures inside the Hub.
+
+Investigation of this showed that JupyterHub uses a single database
+connection, and all database operations are synchronous and block the
+rest of the process.  cf
+https://jupyterhub.readthedocs.io/en/stable/explanation/database.html
+; the session-per-request work will help us, and since we're running
+under Kubernetes already, dynamic horizontal scaling of the Hub is not
+frightening to us.  We're already using CloudSQL (as Postgres) rather
+than sqlite.
+
+Batching empty notebooks (50 at a time, 1 minute in between batches) got
+us to 800 users without Hub errors, up to a total of 953.  An error rate
+of just under 5% was still not great.
+
+By early March we tried a YOLO 3000-user empty notebook run.  We were
+hitting our mobu (single-threaded app, 1 CPU) limits, so once we hit 800
+users the time it was taking to service requests was causing timeouts in
+various parts of the spawn process.  We got to about 1200 users; at that
+point the proxy died again, so we gave it more memory and CPU.
+
+Late March: we dialed down the idle culler run frequency from 5 minutes
+to hourly--since we cull labs that are on the order of a week old, this
+would have little practical impact.  We needed to turn down lab activity
+reports, since a longer culler period wouldn't benefit from high
+granularity.  By this point we were peaking at 69 nodes and were having
+to lengthen timeouts in the controller.
+
+Somewhere around here we found
+https://github.com/IBM/jupyter-tools/blob/87296dd13ab43b905c7657d17e3eac7371e90fc1/docs/configuration.md
+which was very useful.  Highly recommended for anyone scaling
+JupyterHub/Lab.
+
+We were also hitting our (Google-imposed) Kubernetes API server limit of
+200 requests/s.  Smearing out Lab startup helped with this (of course,
+in a real-world scenario, users will not start close-to-simultaneously,
+although each pass through a tight spawning loop from our bot will).  We
+also started hitting ghcr.io rate limit issues from pulling our init
+containers.  To fix this we did the same thing we do with our (large)
+container images: host the init containers in Google Artifact Registry
+as well.
+
+Early April: with those changes and changes to not pull any repositories
+into user labs on startup, we got 3000 Labs that would start, execute a
+print statement in Python, and quit, and they were doing fine.  We
+decided that the Lab/Hub system was working well enough and moved on to
+scaletesting other services.
+
+** Data Preview 1
+
+Data Preview 1 happened on June 30, 2025.  We got roughly 500
+simultaneous active users attempting to run real workloads.
+
+Things did not go entirely smoothly.  Notably we started getting spawn
+failures at a far lower usage rate than we had in scaletesting.
+Investigation showed that the problem seemed to be in the proxy, rather
+than in the Hub or the controller.  While we had seen occasional memory
+exhaustion in the proxy, this didn't look like that.
 
 ** Things we didn't expect
 
-Abandoned open Websockets, because users never shut down their labs when
-they leave, have a huge impact on the proxy.  The answer is, probably,
-"use CHP 5"; as of 8 July, so far so good. [as of 15 Aug, yeah, that
-does the trick]
+*** CHP and Websockets
 
-Cryptominers (and that Google finds them for us).  We don't provide
-GPU-based services at present. It's pointless to do on our
-platform. That doesn't stop people from trying.
+This was eventually traced to abandoned open Websockets, which had a
+huge impact on CHP v4.  It turns out that human users, unlike our
+well-behaved bots, never shut down their labs when they leave.  CHP v4
+(which is still the default in z2jh, or at least was at the time of
+writing) did not deal gracefully with this.  We quickly moved to CHP
+v5 and the problem went away.  As of 15 August, so far so good.
+
+Why not Traefik?  We use individual user domains, and the Traefik
+implementation in z2jh cannot do ACME, which immediately made it a
+non-starter for us.
+
+*** Cryptominers
+
+We got a notice from Google that we had several pods that were making
+lots of connections to Monero.  We investigated, and it was all users
+whose pods had been running flat-out for days, and on digging deeper we
+did indeed find they were running cryptominer code.
+
+We were surprised.  First, pleasantly surprised that Google found this
+for us, and second, baffled by the fact that anyone thought it was worth
+their time to try mining on a 16GB, 4-core container.  We complained to
+the institutions that had issued these account credentials, and that
+problem did not recur.
+
+*** Astronomers mimicking Cryptominers
+
+In the course of that investigation I looked at several other pods that
+had been consuming all of their CPU for days.  Those, it turned out,
+were people legitimately pursuing astronomy, but in inefficient ways, or
+who were trying to use what had been intended as an interactive
+exploration tool as a batch system. One example: someone was using the
+cutout service to retrieve postage stamp images of every source in a
+large result set, twice a second, oblivious to the fact that they were
+crushing the cutout service, that this would take approximately forever,
+and that ultimately they wouldn't have the disk quota to keep the
+resulting images anyway.
+
+*** Disk hogs
+
+Most users, at least thus far, have gotten by with
+hundreds-of-megabytes-to-a-few-gigabytes of persistent POSIX file
+storage.  We currently limit them to 35GB.  In order to do this we had
+to migrate from Google Filestore to Netapp Volumes, because Filestore
+doesn't allow user quotas.
+
+The migration and quota imposition, although announced multiple times,
+starting far in advance of the cutover date, caught some users by
+surprise.
+
+A single user had more data than the other 1100-ish combined.  They were
+not doing anything nefarious.  They just had downloaded several other
+astronomical surveys' data, in their entirety, presumably to do
+interesting crossmatching, which is a thoroughly reasonable expectation.
+The unreasonable part is precaching entire surveys' worth of data in
+their home space (for example, starting a conversation about, "could we
+have this data available as a shared resource?" is at least a
+conversation we can /have/.  The answer might be "no" depending on how
+much data they're talking about, but the answer to having their own
+private copy of it is definitely "no").
+
+Disk space ain't free.  And if it's POSIX space in the cloud, it ain't
+even cheap.  You will need to quota it, assuming it's a resource you
+provide.
+
+** Are the users the enemy?  No, but they're also not /not/ the enemy
+
+This will be obvious to anyone who got here through system
+administration, but perhaps not to those who got here either through
+doing the data science your Science Platform is presenting or as
+software developers: preserving the health of the system must come
+before providing an optimal experience for all users.
+
+Your choices are a bad experience for a few users, or a horrible
+experience for everyone.  I suppose there's a third category: a very,
+very expensive experience for you.
+
+Some small fraction of users will always attempt, through malice or
+naïvety, to consume far more than their fair share of resources.
+
+Kubernetes resource requests and limits are adequate for doling out
+memory or CPU for your user pods (although the OOM kill is unpleasant;
+something in the UI to show the user both their usage and their limit is
+effectively a necessity; just use:
+https://github.com/jupyter-server/jupyter-resource-usage ), but once
+they are using resources beyond their own pods, you need some mechanism
+to limit those uses too.
+
+Most immediately, if your users get persistent storage, you need to put
+quotas on that.
 
 ** Interesting lessons learned
 
@@ -165,7 +337,10 @@ your services /right now/?
 
 How will you differentiate deliberate abuse, like cryptominers, from
 naive users who just create automation that performs inefficient work
-very fast (like two cutouts a second forever)?
+very fast?
+
+Unless you have a very aggressive cull timeout, you should be using CHP
+v5, because otherwise the accumulated websockets will kill you.
 
 If you have a notebook service /and/ you provide other services at the
 same place for the notebook users' consumption, a gatekeeping service
@@ -173,6 +348,9 @@ like Gafaelfawr is a necessity, not just a nice-to-have, because you
 /will/ need to rate-limit your users.
 
 A Science Platform is not just a Notebook Service.  At least, ours is
-not. Yours might be, but it's unlikely. See above: you /will/ need to
-rate-limit users.
+not. Yours might be, but it's unlikely. Presumably they're using that
+notebook to access data, at the very least.  Unless your data service is
+so enormously-specced that it can handle peak user workloads without
+sweating (in which case, you're likely paying too much for its
+steady-state functionality), you /will/ need to rate-limit users.
 
