@@ -136,3 +136,9 @@ dmypy.json
 
 # Mac metadata
 .DS_Store
+
+# Generated files
+*.html
+*.pdf
+*.tex
+gh-pages/

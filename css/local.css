@@ -1,0 +1,20 @@
+.reveal {
+    font-family: Verdana, Calibri, Candara, Segoe, "Segoe UI", Optima, Arial, sans-serif;
+    font-size: x-large;
+    background-image: url("../assets/alpha_TMA.png");
+    background-repeat: no-repeat;
+    background-size: contain;
+    background-position: center center;
+}
+
+.reveal p {
+    text-align: left;
+}
+
+.reveal div.figure p {
+    text-align: center;
+}
+
+.reveal a {
+    color: #058B8CFF;
+}
