@@ -1,21 +1,20 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # based on https://gitlab.com/olberger/docker-org-teaching-export
 
 # Launch the org-mode exporter inside docker
 
-# example: ./docker-org-teaching-export pdf slides.org
-# example: ./docker-org-teaching-export html talk.org
-# example: ./docker-org-teaching-export reveal index.org
+# example: ./exporter.sh pdf slides.org
+# example: ./exporter.sh html index.org
 
 SCRIPTNAME="$(basename "$0")"
 USAGE=`sed "s/__SCRIPTNAME__/$SCRIPTNAME/g" <<"EOF"
-__SCRIPTNAME__ [-h] [-d] [pdf|reveal] document.org -- converts org-mode file using org-mode exporter function ORG_EXPORT_FUNCNAME
+__SCRIPTNAME__ [-h] [-d] [pdf|html] document.org -- converts org-mode file to pdf or (Reveal.js) html
 
 where:
     -h : show this help text
     -d : debug : doesn't quit emacs, runs interactively (to allow debugging)
-    [pdf | reveal ] : export format
+    [pdf | html] : export format
     document.org : source org-mode document to export
 EOF
 `
@@ -36,7 +35,7 @@ done
 shift $((OPTIND - 1))
 
 if [ $# -lt 2 ]; then
-    echo "Error: I need 2 args" >&2
+    echo "Error: format and document required" >&2
     echo >&2
     echo "$USAGE" >&2
     exit 1
@@ -52,7 +51,7 @@ else
 fi
 
 EMACS_START_FILE="--load /emacs/export.el"
-EMACS_WINDOWING="-nw"
+EMACS_NO_WINDOWING="-nw"
 
 uid=$(id -u)
 
@@ -62,17 +61,18 @@ case ${export_format} in
     "pdf")
 	exp_fn="org-latex-export-to-pdf"
 	;;
-    "reveal")
+    "html")
 	exp_fn="org-reveal-export-to-html"
 	;;
     *)
-	echo "Export format must be one of 'reveal' or 'pdf'" >&2
+	echo "Export format must be one of 'html' or 'pdf'" >&2
 	echo $USAGE >&2
 	exit 1
 	;;
 esac
 	
-
+BATCH="--batch"
+INTERACTIVE=""
 if [ "x$DEBUG" != "x" ]; then
     echo "Starting emacs, and waiting for user input of export commands to perform:"
     echo "for instance, here: M-x $exp_fn"
@@ -80,7 +80,9 @@ if [ "x$DEBUG" != "x" ]; then
     echo "To debug further, you can quit Emacs (C-x C-c), and test launching:"
     echo " docker run --rm -i -t -v $(pwd):$(pwd) --workdir=$(pwd) -e USER=root -e UID=$uid -e DEBUG=$DEBUG $docker_image /bin/bash"
     echo "and inside it, execute:"
-    echo " USER=user /startup.sh emacs $EMACS_WINDOWING $EMACS_START_FILE --file $2 --eval '($exp_fn)'"
+    echo " USER=user /startup.sh emacs $EMACS_NO_WINDOWING $EMACS_START_FILE --file $2 --eval '($exp_fn)'"
+    BATCH=""
+    INTERACTIVE="-it"
 fi
 
-docker run --rm -v $(pwd):$(pwd) --workdir=$(pwd) -e "UID=$uid" $docker_image emacs --batch $EMACS_START_FILE --file $2 --eval "($exp_fn)" $KILLARG
+docker run ${INTERACTIVE} --rm -v $(pwd):$(pwd) --workdir=$(pwd) -e "UID=${uid}" $docker_image emacs ${BATCH} "${EMACS_START_FILE}" --file "$2" --eval "($exp_fn)" $KILLARG
