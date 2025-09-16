@@ -232,4 +232,4 @@ To summarize:
 - [[https://github.com/lsst-sqre/nublado][Nublado]] [[https://nublado.lsst.io][(docs)]]
 - [[https://github.com/lsst-sqre/phalanx][Phalanx]] [[https:phalanx.lsst.io][(docs)]]
 - [[https://github.com/lsst-sqre/gafaelfawr][Gafaelfawr]] [[https://gafaelfawr.lsst.io][(docs)]]
-- [[https://github.com/lsst-sqre/jupytercon2025-3000-bots/blob/main/3000bots.org][This talk]]
+- [[https://github.com/lsst-sqre/jupytercon2025-3000-bots/blob/main/3000bots.org][This talk]] [[./3000bots.pdf][(pdf)]]
