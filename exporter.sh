@@ -83,4 +83,4 @@ if [ "x$DEBUG" != "x" ]; then
     echo " USER=user /startup.sh emacs $EMACS_WINDOWING $EMACS_START_FILE --file $2 --eval '($exp_fn)'"
 fi
 
-docker run -v $(pwd):$(pwd) --workdir=$(pwd) -e "UID=$uid" $docker_image emacs --batch $EMACS_START_FILE --file $2 --eval "($exp_fn)" $KILLARG
+docker run --rm -v $(pwd):$(pwd) --workdir=$(pwd) -e "UID=$uid" $docker_image emacs --batch $EMACS_START_FILE --file $2 --eval "($exp_fn)" $KILLARG

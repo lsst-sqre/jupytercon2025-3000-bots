@@ -13,9 +13,9 @@
 #+LATEX_HEADER: \setmainfont{Verdana}
 #+AUTHOR: Adam Thornton
 #+EMAIL: athornton@lsst.org
-#+TITLE: Why 500 Real Users Are Worse Than 3000 Bot Users
+#+TITLE: How 500 Real Users Are Worse Than 3000 Bot Users
 
-* Why 500 Real Users Are Worse Than 3000 Bot Users
+* How 500 Real Users Are Worse Than 3000 Bot Users
 
 [[./assets/logo.png]]
 
@@ -182,7 +182,7 @@ This went less smoothly than we had hoped: we were getting spawn failures at a f
 
 The problem was in the proxy, not the Hub or the controller.  It wasn't the memory exhaustion we'd already seen and fixed.
 
-** Why Are 500 Real Users Worse Than 3000 Bot Users?
+** How Are 500 Real Users Worse Than 3000 Bot Users?
 
 The very simple answer: *bots log out*.
 

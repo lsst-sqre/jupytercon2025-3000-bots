@@ -31,4 +31,5 @@ clean:
 	@rm -rf ./gh-pages
 	@rm -f ./3000bots.html
 	@rm -f ./3000bots.pdf
+	@rm -f ./3000bots.tex
 	@docker rmi athornton/export-org
