@@ -141,4 +141,4 @@ dmypy.json
 *.html
 *.pdf
 *.tex
-gh-pages/
+site/
