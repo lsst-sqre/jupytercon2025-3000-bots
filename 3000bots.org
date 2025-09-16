@@ -21,7 +21,7 @@
 
 * NSF-DOE Vera C. Rubin Observatory
 
-I work for NSF-DOE Vera C. Rubin Observatory (henceforth, "Rubin Observatory" or just "Rubin".
+I work for NSF-DOE Vera C. Rubin Observatory (henceforth, "Rubin Observatory" or just "Rubin").
 
 In operations we will collect 15-20TB per night of astronomical data, over the course of ten years of nightly observations.
 

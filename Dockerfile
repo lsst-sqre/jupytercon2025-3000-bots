@@ -1,3 +1,4 @@
+# Inspired by https://gitlab.com/olberger/docker-org-teaching-export
 FROM debian:testing-slim
 
 WORKDIR /tmp

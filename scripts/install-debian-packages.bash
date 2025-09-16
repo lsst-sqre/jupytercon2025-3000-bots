@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# inspired by https://gitlab.com/olberger/docker-org-teaching-export
+
 set -euo pipefail
 set -x
 export DEBIAN_FRONTEND=noninteractive
