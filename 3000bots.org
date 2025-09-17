@@ -4,7 +4,7 @@
 #+REVEAL_HLEVEL: 1
 #+REVEAL_THEME: white
 #+REVEAL_EXTRA_CSS: ./css/local.css
-#+REVEAL_INIT_OPTIONS: slideNumber: "h/v"
+#+REVEAL_INIT_OPTIONS: slideNumber: "c/t"
 #+REVEAL_PLUGINS: (highlight)
 #+LATEX_COMPILER: lualatex
 #+LATEX_CLASS_OPTIONS: [10pt]
@@ -23,9 +23,11 @@
 
 I work for NSF-DOE Vera C. Rubin Observatory (henceforth, "Rubin Observatory" or just "Rubin").
 
+It's an optical-band telescope with an 8.4m mirror, located on Cerro Pachon in Chile.
 We will begin survey operations by the end of the year.
 
-During the survey we will collect 15-20TB per night of astronomical data, over the course of ten years of nightly observations.
+During the ten-year survey we will collect 15-20TB per night of astronomical data.
+The primary catalog will be about 15PB, and total data holdings about 500PB.
 
 * Rubin Science Platform
 
@@ -70,7 +72,7 @@ There are other Rubin Science Platform sites; this talk is only concerned with o
 
 ** Usage expectations
 
-On the RSP, what you get is a four-core, 16GB Lab container image.
+On the RSP, what you get is a four-core, 16GB Lab pod.
 
 This is intended to be a (fairly anemic) laptop in the cloud, for lightweight hypothesis investigation, not a supercomputer.
 
@@ -97,15 +99,16 @@ We somewhat arbitrarily took three thousand as an upper bound, as "more people t
 
 ** Population assumptions
 
-We expected our Data Preview 1 audience to be those people really excited about Rubin, who wanted to understand our processing pipelines before we start taking real survey data.
+We expected our Data Preview 1 audience to be those people really excited about Rubin, who wanted to understand our processing pipelines in advance of taking real survey data.
 
 Thus we expected them to be somewhat more sophisticated users than our eventual mid-operations median user would be.
 
 ** Actual numbers
 
-A few days before the June 30 DP1 date, we had 998 non-bot users.
+A few days before the June 30 DP1 date, we had 998 non-bot users on the production GKE-hosted RSP.
 
-On July 8, we had 1165 non-bot users, and on August 18, we had 1295.  We found it interesting that 15% of our users signed up in the last week before DP1, and a similar number came aboard in the following month.
+On July 8, we had 1165 non-bot users; on August 18, we had 1295; September 17, 1401.
+15% of our users signed up in the last week before DP1.
 
 Our account approval process is our rate-limiting step: manual approval of each account, to ensure that it's someone with legitimate data rights, is cumbersome.
 
@@ -117,16 +120,15 @@ We have a service we created, called =mobu=, that is able to run various payload
 
 It is mostly used for automated regression testing as the analysis pipelines have evolved.
 
-However, by design, it is indistinguishable (from JupyterHub's point of view) from an astronomer logging in and doing work.
-
+By design, it is indistinguishable (from JupyterHub's point of view) from an astronomer logging in and doing work.
 It uses the Hub API to establish a JupyterLab session and then can run Python code within JupyterLab kernels, either as entire notebooks or as individual statements.
 
-** Overall strategy
+** Overall strategy: get to 3000
 
 Our strategy was to get to 3000 simultaneous users, which we did not expect to succeed immediately.
-We intended an iterative strategy as we hit successive performance or functionality bottlenecks.
+We intended to iterate over successive performance and functionality bottlenecks until we hit that concurrency goal.
 
-We began in late January 2025, and finished our JupyterHub/Lab testing in late April.
+We began in late January 2025, and finished our JupyterHub/Lab testing in late April, doing one three-hour scaletesting session a week.
 
 *** Initial Concurrency Results
 
@@ -136,6 +138,7 @@ Our very first test was 1000 users who logged in, did not do anything (not even 
 At some time previously, we'd capped Mobu at 1000 concurrent tasks, because surely that would be plenty.
 
 We raised that limit and got 36000 K8s events per minute, as expected, and moved on to spawning user pods.
+Hub user tracking is fast and not a bottleneck.
 
 *** Spawning pods
 
@@ -149,7 +152,7 @@ Because the control plane was unreliable, user pod deletion was also sometimes t
 
 Scaletesting in February and March was devoted to chasing down timeouts and internal Hub and controller errors.
 
-We found some race conditions in our spawner code (mostly around concurrent dict access without locks) that we never would have in a reasonably-loaded system.
+We found some race conditions in our controller code that we would have been difficult to find in a reasonably-loaded system.
 
 We realized that our practice of cloning tutorial repositories into user labs at startup was hitting GitHub rate limit problems at scale, and modified our tutorial strategy accordingly.
 
@@ -159,10 +162,10 @@ More memory and CPU for mobu and the Hub helped, but we still were getting timeo
 
 Eventually we realized that JupyterHub uses a single database connection, and all database operations are [[https://jupyterhub.readthedocs.io/en/stable/explanation/database.html][synchronous and block the rest of the process]].
 
-The only remediation we could immediately take therefore was drastically reducing the frequency of lab activity reports and idle culler run frequency.
+The only remediation we could immediately take therefore was drastically reducing the frequency of lab activity reports and culler polling.
 This cut the number of database requests (mostly writes) sharply and helped significantly.
 
-For instance: we only cull after about a week, so an hourly poll (rather than the default five minutes) was plenty of culler granularity.
+For instance: we only cull idle users after about a week, so an hourly activity poll (rather than the default five minutes) was sufficient granularity.
 
 *** Desired JupyterHub enhancements
 
@@ -170,9 +173,7 @@ The single-threading on the database is becoming problematic.
 
 We eagerly await the ability to scale the Hub horizontally.
 
-Multiple Hubs, session affinity, and a shared database would be one way.
-
-A database connection pool and one connection per user session rather than one per hub process would be another.
+One database session per request and multiple Hub instances, as discussed in the link above, will be fantastic for us.
 
 *** Other things we found
 
@@ -198,7 +199,7 @@ At this point, with the DP1 deadline approaching, we moved on to other services.
 We got 500-ish simultaneous users when Data Preview 1 went live.
 That was within our expectations, and maybe even a little disappointing (even if it's still 1/40th of all the professional astronomers in the world).
 
-This went less smoothly than we had hoped: we were getting spawn failures at a far lower usage rate than we had in scaletesting.
+This went less smoothly than we had hoped: spawn failures started to occur at a far lower user count than we had achieved in scaletesting.
 
 The problem was in the proxy, not the Hub or the controller.
 It wasn't the memory exhaustion we'd already seen and fixed.
@@ -225,10 +226,11 @@ We are also validating assumptions about data access.
 This involves notebooks that make large queries that require a lot of memory.
 
 We found we needed to make our overcommital ratio much more tunable.
-While an actual user workload allows a high overcommital ratio (we've found 4 to work well).
-If your workload is 50 bot users all simultaneously doing very memory-intensive work, you run out of node memory when the Labs all ask for their whole memory limit at once.
+A normal real-user workload allows a high overcommital ratio (we've found 4 to work well).
 
-Most of our new bottlenecks are neither in Hub or Lab but in the services notebooks consume.
+If your workload is 50 bot users all simultaneously doing very memory-intensive work, when the Labs all ask for their whole memory limit at once (even though each process stays just under its limit), node memory runs out.
+
+Most of our remaining bottlenecks are neither in Hub nor Lab but in the services notebooks consume.
 
 ** Your Platform Probably Isn't Just A Notebook Service
 
@@ -253,12 +255,13 @@ You're going to want to use something similar.
 
 * Summary of Scaling Lessons
 
+- Use CHPv5.
 - Onboarding and offboarding are important.
   Think them through before the users arrive /en masse/.
+- Have some kind of internal resource-limiting service so your notebook users can't crush your other services.
 - Can you differentiate deliberate abuse from clueless enthusiasm?
-- Use CHPv5 unless you have a very aggressive cull timeout.
-- Have some kind of internal gatekeeping service so your notebook users can't crush your other services.
-- Sometimes you have to downgrade a few users' experience to keep the overall experience tolerable for everyone.
+
+Sometimes you have to downgrade a few users' experience to keep the overall experience tolerable for everyone.
 
 * Links
 
