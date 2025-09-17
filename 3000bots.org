@@ -215,7 +215,7 @@ We have [[https://gafaelfawr.lsst.io][Gafaelfawr]] for this (thus it's built int
 * Problematic Usage
 
 - Cryptominers.  Google warned us based on their outbound connection patterns, which is good because we might not have noticed otherwise, because...
-- Naïve users wil indeed just sit there and hammer the system: two "postage stamp" image cutouts a second (one for every single object in a huge result set) forever.
+- Naïve users will indeed just sit there and hammer the system: two "postage stamp" image cutouts a second (one for every single object in a huge result set) forever.
 - You absolutely need disk quotas if you provide per-user persistent storage.
 
 * Scaling Considerations

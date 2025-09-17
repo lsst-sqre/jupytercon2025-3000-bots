@@ -1,0 +1,61 @@
+name: CI
+
+env: {}
+
+"on":
+  merge_group: {}
+  pull_request: {}
+  push:
+    branches-ignore:
+      # These should always correspond to pull requests, so ignore them for
+      # the push trigger and let them be triggered by the pull_request
+      # trigger, avoiding running the workflow twice. This is a minor
+      # optimization so there's no need to ensure this is comprehensive.
+      - "dependabot/**"
+      - "gh-readonly-queue/**"
+      - "renovate/**"
+      - "tickets/**"
+      - "t/**"
+      - "u/**"
+    tags:
+      - "*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          name: "export-org"
+
+      - name: Build container
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: "athornton/export-org:latest"
+          builder: "export-org"
+          cache-from: type=gha
+          cache-to: "type=gha,mode=max"
+          load: true
+
+      - name: Build site
+        run: make site
+
+      - name: Export to gh-pages
+        # Only on push to main
+        # only don't even do that until we sort this out for lsst-sqre
+        if: (github.event_name == 'push' && github.ref_name == 'main' && '4 lights' == '5 lights')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+
+      
