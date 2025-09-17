@@ -5,16 +5,16 @@
 
 USER=${USER:-root}
 HOME=${HOME:-/root}
-UID=${UID:-0}
+uid=${UID:-0}
 if [ "x$DEBUG" != "x" ]; then
     set -x
     echo "DEBUG: DEBUG = $DEBUG"
     echo "DEBUG: USER = $USER"
     echo "DEBUG: HOME = $HOME"
-    echo "DEBUG: UID = $UID"
+    echo "DEBUG: UID = $uid"
 fi
 if [ "$USER" != "root" ]; then
-    useradd --home-dir $HOME --shell /bin/bash --uid $UID --user-group --groups adm,sudo $USER
+    useradd --home-dir $HOME --shell /bin/bash --uid $uid --user-group --groups adm,sudo $USER
     if [ -z "$PASSWORD" ]; then
         if [ "x$DEBUG" != "x" ]; then
             echo "DEBUG: set default password for user $USER to \"ubuntu\""
