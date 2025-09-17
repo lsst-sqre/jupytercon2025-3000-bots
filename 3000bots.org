@@ -23,20 +23,22 @@
 
 I work for NSF-DOE Vera C. Rubin Observatory (henceforth, "Rubin Observatory" or just "Rubin").
 
-In operations we will collect 15-20TB per night of astronomical data, over the course of ten years of nightly observations.
+We will begin survey operations by the end of the year.
+
+During the survey we will collect 15-20TB per night of astronomical data, over the course of ten years of nightly observations.
 
 * Rubin Science Platform
 
-I work on the Rubin Science Platform.  It provides services to the Rubin science community:
+Much of my work is on the Rubin Science Platform (henceforth, "RSP").  It provides services to the Rubin science community:
 
-- Jupyter notebooks.
+- Jupyter notebooks with a kernel containing our data analysis pipelines.
 - A search-and-visualization tool for Rubin astronomical data.
 - API access to Rubin astronomical data.
 - Et al.
 
 It is all deployed through [[https://phalanx.lsst.io][Phalanx]], a GitOps ArgoCD-and-therefore-Helm-based Kubernetes deployment framework.
 
-In particular, I work a lot on the RSP Notebook aspect.
+In particular, I often focus on the RSP Notebook Aspect.
 
 ** RSP Notebook Aspect
 
@@ -51,13 +53,9 @@ The Notebook Aspect is designed to:
 
 On June 30, 2025, we had our first public release of observational catalog data.
 
-The primary site for access is [[https://data.lsst.cloud][our Internet Data Facility hosted by Google]].
+The primary site for astronomical community access is [[https://data.lsst.cloud][our Internet Data Facility hosted by Google]].
 
-There are other Rubin Science Platform sites; this talk is only concerned with our Google Cloud Platform-hosted production instance.
-
-We expected a lot of interested users, but precisely how many and how concurrent they would be was unknown.
-
-The weak bounds were "between zero and ten thousand."
+There are other Rubin Science Platform sites; this talk is only concerned with our Google Cloud Platform-hosted production instance and its integration counterpart where we did the actual scaletesting.
 
 ** Our JupyterHub/JupyterLab environment
 
@@ -74,9 +72,20 @@ The weak bounds were "between zero and ten thousand."
 
 On the RSP, what you get is a four-core, 16GB Lab container image.
 
-This is intended to be a (fairly anemic) laptop in the cloud, for lightweight hyptothesis investigation, not a supercomputer.
+This is intended to be a (fairly anemic) laptop in the cloud, for lightweight hypothesis investigation, not a supercomputer.
 
-For things that need significant amounts of memory or CPU, the user is expected to use a batch system instead.
+For things that need significant amounts of memory or CPU, the user is
+expected to use a batch system instead.
+
+** Site setup
+
+We run on Google Kubernetes Engine, with autoscaling enabled.
+
+Each node has 32 cores and 128GB of memory (n2-standard-32).
+
+On a typical Wednesday morning (17 Sep 2025), we had 123 users on 5 Lab nodes.
+
+[[./assets/nodes.png]]
 
 * Scale Testing
 
@@ -106,7 +115,7 @@ Our highest observed concurrency thus far has been about 550 non-bot users.
 
 We have a service we created, called =mobu=, that is able to run various payloads (mostly Jupyter notebooks) within the RSP.
 
-It is mostly used for automated regression testing as the analysis stack has evolved.
+It is mostly used for automated regression testing as the analysis pipelines have evolved.
 
 However, by design, it is indistinguishable (from JupyterHub's point of view) from an astronomer logging in and doing work.
 
@@ -115,36 +124,34 @@ It uses the Hub API to establish a JupyterLab session and then can run Python co
 ** Overall strategy
 
 Our strategy was to get to 3000 simultaneous users, which we did not expect to succeed immediately.
+We intended an iterative strategy as we hit successive performance or functionality bottlenecks.
 
-Our plan was to go until we got a failure, fix that failure, and repeat until we had 3000 simultaneous user workloads all running.
-
-We began in late January 2025, and wrapped up our Jupyter testing in late April.
+We began in late January 2025, and finished our JupyterHub/Lab testing in late April.
 
 *** Initial Concurrency Results
 
-Our very first test was 1000 users who logged in, did not do anything (not even start a pod), and logged out.
+Our very first test was 1000 users who logged in, did not do anything (not even start a pod), and logged out; success.
 
-That was fine.
+3000 users failed because of our own lack of foresight.
+At some time previously, we'd capped Mobu at 1000 concurrent tasks, because surely that would be plenty.
 
-We next tried 3000 users, and that failed.  We never got significantly above 1000.
-
-It turned out that Mobu was limiting use to 1000 concurrent tasks, because surely that'd be plenty, right?  We raised that limit and got 36000 K8s events per minute, as expected.
-
-Then we moved on to spawning user pods.
+We raised that limit and got 36000 K8s events per minute, as expected, and moved on to spawning user pods.
 
 *** Spawning pods
 
 100 simultaneous users "running" a codeless notebook (no Python execution, just text) worked fine, and GKE autoscaling was performing as advertised.
 
-1000 users failed: at 300 users we started to get spawn timeouts as the K8s control plane became overwhelmed; user pod deletion was also timing out and failing.
+1000 users failed: at 300 users we started to get spawn timeouts as the K8s control plane was failing to keep up.
+
+Because the control plane was unreliable, user pod deletion was also sometimes timing out and failing.
 
 *** Remediation
 
-Scaletesting in February and March was devoted to chasing down timeouts and internal Hub errors.
+Scaletesting in February and March was devoted to chasing down timeouts and internal Hub and controller errors.
 
-We found some Python dict race conditions we never would have in a reasonably-loaded system.
+We found some race conditions in our spawner code (mostly around concurrent dict access without locks) that we never would have in a reasonably-loaded system.
 
-We realized that our practice of cloning tutorial repositories into user labs at startup would hit GitHub rate limit problems at scale, and modified our tutorial strategy accordingly.
+We realized that our practice of cloning tutorial repositories into user labs at startup was hitting GitHub rate limit problems at scale, and modified our tutorial strategy accordingly.
 
 More memory and CPU for mobu and the Hub helped, but we still were getting timeouts from Lab-to-Hub communications.
 
@@ -152,19 +159,31 @@ More memory and CPU for mobu and the Hub helped, but we still were getting timeo
 
 Eventually we realized that JupyterHub uses a single database connection, and all database operations are [[https://jupyterhub.readthedocs.io/en/stable/explanation/database.html][synchronous and block the rest of the process]].
 
-We're already using the Postgres flavor of CloudSQL, so eventually scaling the Hub horizontally and managing session affinity will help.
+The only remediation we could immediately take therefore was drastically reducing the frequency of lab activity reports and idle culler run frequency.
+This cut the number of database requests (mostly writes) sharply and helped significantly.
 
-In the near term, just drastically reducing the frequency of lab activity reports and idle culler run frequency, which cut the number of database requests sharply, helped significantly.
+For instance: we only cull after about a week, so an hourly poll (rather than the default five minutes) was plenty of culler granularity.
 
-For instance: we only cull after about a week, so an hour (rather than five minutes) was plenty of culler granularity.
+*** Desired JupyterHub enhancements
+
+The single-threading on the database is becoming problematic.
+
+We eagerly await the ability to scale the Hub horizontally.
+
+Multiple Hubs, session affinity, and a shared database would be one way.
+
+A database connection pool and one connection per user session rather than one per hub process would be another.
 
 *** Other things we found
 
-[[https://github.com/IBM/jupyter-tools/blob/87296dd13ab43b905c7657d17e3eac7371e90fc1/docs/configuration.md][IBM's jupyter-tools]] has some very useful tuning advice.  This is where, for instance, we got our recommendations for culling and activity polling.
+[[https://github.com/IBM/jupyter-tools/blob/87296dd13ab43b905c7657d17e3eac7371e90fc1/docs/configuration.md][IBM's jupyter-tools]] has some very useful tuning advice.
+This is where, for instance, we got our recommendations for culling and activity polling.
 
-Google imposes a 200-requests-per-second limit on the K8s control plane.  We ended up smearing out our startups with random delays to avoid this, which is more representative of real-world usage anyhow.
+Google imposes a 200-requests-per-second limit on the K8s control plane.
+We ended up smearing out our pod startups by dispatching them in batches rather than all at once in a single tight loop.
 
-Ghcr.io imposes a high but finite rate limit for pulling container images (we prepull and cache our actual Lab payload containers); we solved this by hosting the both the init and Lab containers in Google Artifact Registry.
+Ghcr.io imposes a high but finite rate limit for pulling container images.
+We worked around this by hosting the both the init and Lab containers in Google Artifact Registry.
 
 [[./assets/k8scp-200.png]]
 
@@ -176,11 +195,13 @@ At this point, with the DP1 deadline approaching, we moved on to other services.
 
 * Data Preview 1 Reality
 
-We got 500-ish simultaneous users when Data Preview 1 went live.  That was within our expectations, and maybe even a little disappointing (even if it's still 1/40th of all the professional astronomers in the world).
+We got 500-ish simultaneous users when Data Preview 1 went live.
+That was within our expectations, and maybe even a little disappointing (even if it's still 1/40th of all the professional astronomers in the world).
 
 This went less smoothly than we had hoped: we were getting spawn failures at a far lower usage rate than we had in scaletesting.
 
-The problem was in the proxy, not the Hub or the controller.  It wasn't the memory exhaustion we'd already seen and fixed.
+The problem was in the proxy, not the Hub or the controller.
+It wasn't the memory exhaustion we'd already seen and fixed.
 
 ** How Are 500 Real Users Worse Than 3000 Bot Users?
 
@@ -188,44 +209,56 @@ The very simple answer: *bots log out*.
 
 ** Configurable Hub Proxy and Websockets
 
-Abandoned open Websockets wreck CHP v4.
+Abandoned open websockets wreck CHP v4.
 
-Human users, despite the fact that we give them a perfectly good menu item to save their work and shut down their pod, don't use it.  /At best/ they close their browser tab, and most of them don't even do that.
+Human users, despite the fact that we give them a perfectly good menu item to save their work and shut down their pod, don't use it.
+/At best/ they close their browser tab, and most of them don't even do that.
 
-CHP v5 addresses this problem adequately.  After adopting v5, that concurrency problem vanished and we haven't seen it again.
+CHP v5 addresses this problem adequately.
+After adopting v5, that concurrency problem vanished and we haven't seen it again.
 
 At the moment we are coping well with 500-ish simultaneous users doing science work.
 
-Why CHP v5 and not Traefik?  We use individual user domains, and Traefik in z2jh can't do ACME, so it's a non-starter for us.
-
 ** Post-DP1 lessons
 
-We are also validating assumptions about data access.  This involves notebooks that make large queries that require a lot of memory.
+We are also validating assumptions about data access.
+This involves notebooks that make large queries that require a lot of memory.
 
-We found we needed to make our overcommital ratio much more tunable, because, while an actual user workload allows a high overcommit factor (we've found 4 to work well), when you have 50 bot users all doing very memory-intensive work, you get nodes that run out of memory while each pod is asking for nearly its memory limit simultaneously.
+We found we needed to make our overcommital ratio much more tunable.
+While an actual user workload allows a high overcommital ratio (we've found 4 to work well).
+If your workload is 50 bot users all simultaneously doing very memory-intensive work, you run out of node memory when the Labs all ask for their whole memory limit at once.
+
+Most of our new bottlenecks are neither in Hub or Lab but in the services notebooks consume.
 
 ** Your Platform Probably Isn't Just A Notebook Service
 
-At the very least, you probably have some sort of A&A sytem, a Notebook service, and a data source, right?
+At the very least, you probably have some sort of A&A sytem, a Notebook service, and a data source.
+You may have services that sit in between your notebooks and your data store.
+We certainly do.
 
-You may need to (internally) rate limit access to other services, especially if they perform significant computation on the user's behalf.
+If so, you will likely need to (internally) rate limit access to other services, especially if they perform significant computation on the user's behalf.
 
-We have [[https://gafaelfawr.lsst.io][Gafaelfawr]] for this (thus it's built into the A&A system); you're going to want to use something similar.
+We have [[https://gafaelfawr.lsst.io][Gafaelfawr]] for this (thus it's built into the A&A system).
+You're going to want to use something similar.
 
 * Problematic Usage
 
-- Cryptominers.  Google warned us based on their outbound connection patterns, which is good because we might not have noticed otherwise, because...
-- Naïve users will indeed just sit there and hammer the system: two "postage stamp" image cutouts a second (one for every single object in a huge result set) forever.
+- Cryptominers: Google warned us based on their outbound connection patterns.
+  That was good because we might not have noticed otherwise, because...
+- Naïve users will indeed just hammer the system.
+  One user looped over a huge result set, asking for a "postage stamp" image for every single object.
+  That was two cutouts a second, and would have taken months to complete.
 - You absolutely need disk quotas if you provide per-user persistent storage.
+  Before we imposed quotas, one user used more disk space than all thousand others combined.
 
-* Scaling Considerations
+* Summary of Scaling Lessons
 
-To summarize:
-
-- Onboarding and offboarding are important.  Think them through before the users arrive /en masse/.
+- Onboarding and offboarding are important.
+  Think them through before the users arrive /en masse/.
 - Can you differentiate deliberate abuse from clueless enthusiasm?
 - Use CHPv5 unless you have a very aggressive cull timeout.
 - Have some kind of internal gatekeeping service so your notebook users can't crush your other services.
+- Sometimes you have to downgrade a few users' experience to keep the overall experience tolerable for everyone.
 
 * Links
 
